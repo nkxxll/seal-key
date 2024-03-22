@@ -37,7 +37,6 @@
 /* TA API: UUID and command IDs */
 #include <seal-key_ta.h>
 
-#define DEFAULT_KEY_SIZE 32
 #define INFO(fmt, ...)                                                         \
     printf("[+] %s:%d " fmt "\n", __func__, __LINE__, ##__VA_ARGS__)
 #define WARN(fmt, ...)                                                         \
@@ -47,6 +46,7 @@
 #define ERRO(fmt, ...)                                                         \
     printf("[[-!-]] %s:%d " fmt "\n", __func__, __LINE__, ##__VA_ARGS__)
 
+#define MAX_KEY_LEN 1024
 #define SUBCOMMAND_GET_KEY 1
 #define SUBCOMMAND_SET_KEY 2
 #define SUBCOMMAND_DEL_KEY 3
@@ -128,12 +128,16 @@ void parse_args(int argc, char *argv[], options_t *options) {
             if (strcmp(argv[3], "-f") == 0) {
                 options->file = argv[4];
             } else if (strcmp(argv[3], "-k") == 0) {
-                // only copy key len to the key and warn if the key is shorter
-                // or longer
-                if (strlen(argv[4]) != options->key_len) {
-                    printf("Warning: key length is not %zd bytes\n",
-                           options->key_len);
+                // subtract the \0
+                options->key_len = strlen(argv[4]);
+                if (options->key_len > MAX_KEY_LEN) {
+                    ERRO("Warning: key length is to big max is: %d bytes\n",
+                         MAX_KEY_LEN);
+                    exit(1);
                 }
+                char *buf = malloc(options->key_len * sizeof(char));
+                options->key = buf;
+                // this cuts of the \0 bytes but this is ok
                 strncpy(options->key, argv[4], options->key_len);
             } else {
                 usage_set_key();
@@ -157,23 +161,42 @@ void parse_args(int argc, char *argv[], options_t *options) {
         exit(1);
     }
 }
-
-void read_key_file(char *file, char *key, size_t key_len) {
+long get_file_size(char *file) {
     FILE *f;
-    f = fopen(file, "r");
+    f = fopen(file, "rb");
     if (f == NULL) {
         printf("Error opening file %s\n", file);
         exit(1);
     }
-    int res = fread(key, 1, key_len, f);
-    if (res != key_len) {
+    if (fseek(f, 0, SEEK_END) < 0) {
+        fclose(f);
+        ERRO("Failed to get the size of %s", file);
+        exit(1);
+    }
+    // todo: is this save from an integer overflow?
+    long size = ftell(f);
+    if (size < 0) {
+        fclose(f);
+        ERRO("Failed to get the size of %s", file);
+        exit(1);
+    }
+    rewind(f);
+    fclose(f);
+    return size;
+}
+
+void read_key_file(options_t *opts) {
+    FILE *f;
+    f = fopen(opts->file, "rb");
+    int res = fread(opts->key, 1, opts->key_len, f);
+    if (res != opts->key_len) {
         printf("Error reading file %s is the key as long as you say it is?\n",
-               file);
+               opts->file);
         exit(1);
     }
     int fcres = fclose(f);
     if (fcres != 0) {
-        printf("Error closing file %s\n", file);
+        printf("Error closing file %s\n", opts->file);
         exit(1);
     }
 }
@@ -297,27 +320,19 @@ TEEC_Result delete_secure_object(struct test_ctx *ctx, char *id) {
 }
 
 int main(int argc, char *argv[]) {
-    // char *keysize_str = getenv("SK_KEY_SIZE");
-    int key_len = DEFAULT_KEY_SIZE;
-    // if (keysize_str == NULL) {
-    //     key_len = DEFAULT_KEY_SIZE;
-    // } else {
-    //     key_len = atoi(keysize_str);
-    // }
-    char key_data[key_len];
     struct test_ctx ctx;
     struct options o;
     o.subcommand = 0;
     o.name = "key#1";
-    o.key = key_data;
+    o.key = NULL;
     o.file = NULL;
-    o.key_len = key_len;
+    o.key_len = 0;
 
     parse_args(argc, argv, &o);
 
     TEEC_Result res;
 
-    DEBG("key: %s, file %s", o.key, o.file);
+    DEBG("key before read file and so on: %s, file %s", o.key, o.file);
 
     // test this after
     switch (o.subcommand) {
@@ -326,14 +341,32 @@ int main(int argc, char *argv[]) {
         if (o.name == NULL) {
             errx(1, "No key name provided");
         }
-        if (o.file != NULL) {
-            read_key_file(o.file, o.key, key_len);
+        if (o.file != NULL && o.key == NULL) {
+            o.key_len = get_file_size(o.file);
+            if (o.key_len < 0) {
+                ERRO("Failed to get the size of %s", o.file);
+                exit(1);
+            }
+            if (o.key_len > MAX_KEY_LEN) {
+                ERRO("The file contents are too long");
+                exit(1);
+            }
+            // the key len includes the \0 byte
+            // this is ok for the tests but we only want the key not the \0
+            // byte
+            o.key_len--;
+            o.key = malloc(o.key_len * sizeof(char));
+            read_key_file(&o);
         }
         break;
     default:
         WARN("Subcommand not implemented!\n");
+        exit(1);
         break;
     }
+
+    DEBG("before writing to optee key: %s, file %s, len %zd", o.key, o.file,
+         o.key_len);
 
     INFO("Prepare session with the TA\n");
     prepare_tee_session(&ctx);
@@ -343,17 +376,19 @@ int main(int argc, char *argv[]) {
     // INFO("this still only 0xA1 here update that\n");
     // memset(key_data, 0xA1, sizeof(key_data));
 
-    res = write_secure_object(&ctx, o.name, o.key, sizeof(key_data));
+    char key_data[o.key_len];
+    memcpy(key_data, o.key, o.key_len);
+    res = write_secure_object(&ctx, o.name, key_data, sizeof(key_data));
     if (res != TEEC_SUCCESS)
         errx(1, "Failed to create an object in the secure storage");
 
     INFO("- Read back the object\n");
 
-    char read_data[key_len];
+    char read_data[o.key_len];
     res = read_secure_object(&ctx, o.name, read_data, sizeof(read_data));
     if (res != TEEC_SUCCESS)
         errx(1, "Failed to read an object from the secure storage");
-    if (memcmp(key_data, read_data, sizeof(key_data)))
+    if (memcmp(o.key, read_data, sizeof(o.key_len)))
         errx(1, "Unexpected content found in secure storage");
 
     // still for testing i think
