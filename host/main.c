@@ -396,6 +396,7 @@ int main(int argc, char *argv[]) {
         INFO("- Read back the object\n");
 
         res = read_secure_object(&ctx, o.name, read_data, sizeof(read_data));
+        DEBG("key after read: %s", read_data);
         if (res != TEEC_SUCCESS)
             errx(1, "Failed to read an object from the secure storage");
         break;
