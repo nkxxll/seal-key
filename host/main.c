@@ -89,8 +89,11 @@ TEEC_Result read_secure_object(struct test_ctx *ctx, char *id, char *data,
         TEEC_InvokeCommand(&ctx->sess, TA_SEAL_KEY_CMD_READ_RAW, &op, &origin);
     switch (res) {
     case TEEC_SUCCESS:
+        break;
     case TEEC_ERROR_SHORT_BUFFER:
+        printf("Buffer too short\n");
     case TEEC_ERROR_ITEM_NOT_FOUND:
+        printf("Item not found\n");
         break;
     default:
         printf("Command READ_RAW failed: 0x%x / %u\n", res, origin);
@@ -188,6 +191,7 @@ void usage(const char *prog_name) {
 void usage_get_key() {
     printf("Usage: get-key [OPTION] ...\n");
     printf("OPTIONS:\n");
+    printf("-s\tsize of the key\n");
 }
 
 void usage_set_key() {
@@ -220,6 +224,20 @@ void parse_args(int argc, char *argv[], options_t *options) {
     if (strcmp(argv[1], "get-key") == 0 || strcmp(argv[1], "g") == 0) {
         options->subcommand = SUBCOMMAND_GET_KEY;
         set_name(argv[2], options);
+        if (argc < 5) {
+            usage_get_key();
+        }
+        if (strcmp(argv[3], "-s") == 0) {
+            int len = atoi(argv[4]);
+            if (len > MAX_KEY_LEN) {
+                ERRO("Warning: key length is to big max is: %d bytes\n",
+                     MAX_KEY_LEN);
+                exit(1);
+            }
+            options->key_len = len;
+        } else {
+            usage_get_key();
+        }
     } else if (strcmp(argv[1], "set-key") == 0 || strcmp(argv[1], "s") == 0) {
         options->subcommand = SUBCOMMAND_SET_KEY;
         set_name(argv[2], options);
@@ -333,6 +351,11 @@ int main(int argc, char *argv[]) {
 
     DEBG("key before read file and so on: %s, file %s", o.key, o.file);
 
+    INFO("Prepare session with the TA\n");
+    prepare_tee_session(&ctx);
+
+    char key_data[o.key_len];
+    char read_data[o.key_len];
     // test this after
     switch (o.subcommand) {
     case SUBCOMMAND_SET_KEY:
@@ -357,51 +380,47 @@ int main(int argc, char *argv[]) {
             o.key = malloc(o.key_len * sizeof(char));
             read_key_file(&o);
         }
+        INFO("- Create and load key in the TA secure storage\n");
+
+        memcpy(key_data, o.key, o.key_len);
+        res = write_secure_object(&ctx, o.name, key_data, sizeof(key_data));
+        if (res != TEEC_SUCCESS)
+            errx(1, "Failed to create an object in the secure storage");
+
         break;
     case SUBCOMMAND_GET_KEY:
         INFO("Get key from the secure storage\n");
         if (o.name == NULL) {
             errx(1, "No key name provided");
         }
+        INFO("- Read back the object\n");
+
+        res = read_secure_object(&ctx, o.name, read_data, sizeof(read_data));
+        if (res != TEEC_SUCCESS)
+            errx(1, "Failed to read an object from the secure storage");
+        break;
+    case SUBCOMMAND_DEL_KEY:
+        INFO("Delete key from the secure storage\n");
+        if (o.name == NULL) {
+            errx(1, "No key name provided");
+        }
+        INFO("- Delete the key after reading it\n");
+        res = delete_secure_object(&ctx, o.name);
+        if (res != TEEC_SUCCESS)
+            errx(1, "Failed to delete the object: 0x%x", res);
+
         break;
     default:
         WARN("Subcommand not implemented!\n");
         exit(1);
+        goto cleanup;
         break;
     }
 
     DEBG("before writing to optee key: %s, file %s, len %zd", o.key, o.file,
          o.key_len);
 
-    INFO("Prepare session with the TA\n");
-    prepare_tee_session(&ctx);
-
-    INFO("- Create and load key in the TA secure storage\n");
-
-    // INFO("this still only 0xA1 here update that\n");
-    // memset(key_data, 0xA1, sizeof(key_data));
-
-    char key_data[o.key_len];
-    memcpy(key_data, o.key, o.key_len);
-    res = write_secure_object(&ctx, o.name, key_data, sizeof(key_data));
-    if (res != TEEC_SUCCESS)
-        errx(1, "Failed to create an object in the secure storage");
-
-    INFO("- Read back the object\n");
-
-    char read_data[o.key_len];
-    res = read_secure_object(&ctx, o.name, read_data, sizeof(read_data));
-    if (res != TEEC_SUCCESS)
-        errx(1, "Failed to read an object from the secure storage");
-    if (memcmp(o.key, read_data, sizeof(o.key_len)))
-        errx(1, "Unexpected content found in secure storage");
-
-    // still for testing i think
-    INFO("- Delete the key after reading it\n");
-    res = delete_secure_object(&ctx, o.name);
-    if (res != TEEC_SUCCESS)
-        errx(1, "Failed to delete the object: 0x%x", res);
-
+cleanup:
     INFO("\nWe're done, close and release TEE resources\n");
     terminate_tee_session(&ctx);
     return 0;
