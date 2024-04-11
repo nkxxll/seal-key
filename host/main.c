@@ -226,23 +226,26 @@ void parse_args(int argc, char *argv[], options_t *options) {
         set_name(argv[2], options);
         if (argc < 5) {
             usage_get_key();
+            exit(1);
         }
         if (strcmp(argv[3], "-s") == 0) {
             int len = atoi(argv[4]);
             if (len > MAX_KEY_LEN) {
-                ERRO("Warning: key length is to big max is: %d bytes\n",
+                ERRO("Warning: key length is to big max is: %zu bytes\n",
                      MAX_KEY_LEN);
                 exit(1);
             }
             options->key_len = len;
         } else {
             usage_get_key();
+            exit(1);
         }
     } else if (strcmp(argv[1], "set-key") == 0 || strcmp(argv[1], "s") == 0) {
         options->subcommand = SUBCOMMAND_SET_KEY;
         set_name(argv[2], options);
         if (argc < 3) {
             usage_set_key();
+            exit(1);
         } else if (argc == 5) {
             if (strcmp(argv[3], "-f") == 0) {
                 options->file = argv[4];
@@ -250,7 +253,7 @@ void parse_args(int argc, char *argv[], options_t *options) {
                 // subtract the \0
                 options->key_len = strlen(argv[4]);
                 if (options->key_len > MAX_KEY_LEN) {
-                    ERRO("Warning: key length is to big max is: %d bytes\n",
+                    ERRO("Warning: key length is to big max is: %zu bytes\n",
                          MAX_KEY_LEN);
                     exit(1);
                 }
@@ -258,8 +261,27 @@ void parse_args(int argc, char *argv[], options_t *options) {
                 options->key = buf;
                 // this cuts of the \0 bytes but this is ok
                 strncpy(options->key, argv[4], options->key_len);
+            } else if (argc == 4 && strcmp(argv[3], "-k")) {
+                // ask for stdin
+                printf("Enter the key (the key is cut at %zu):\n", MAX_KEY_LEN);
+                char buf[MAX_KEY_LEN];
+                // Read at most n bytes
+                size_t bytesRead = fread(buf, 1, MAX_KEY_LEN, stdin);
+                if (bytesRead > 0) {
+                    printf("Read %zu bytes\n", bytesRead);
+                    options->key_len = bytesRead;
+                    char *buf = malloc(options->key_len * sizeof(char));
+                    if (buf == NULL) {
+                        errx(1, "error allocating memory on the heap");
+                    }
+                    options->key = buf;
+                    strncpy(options->key, buf, options->key_len);
+                } else {
+                    printf("Error reading input\n");
+                }
             } else {
                 usage_set_key();
+                exit(1);
             }
         }
     } else if (strcmp(argv[1], "del-key") == 0 || strcmp(argv[1], "d") == 0) {
@@ -347,11 +369,7 @@ int main(int argc, char *argv[]) {
 
     parse_args(argc, argv, &o);
 
-    TEEC_Result res;
-
-    DEBG("key before read file and so on: %s, file %s", o.key, o.file);
-
-    INFO("Prepare session with the TA\n");
+    TEEC_Result res = TEEC_SUCCESS;
     prepare_tee_session(&ctx);
 
     char key_data[o.key_len];
@@ -373,20 +391,30 @@ int main(int argc, char *argv[]) {
                 ERRO("The file contents are too long");
                 exit(1);
             }
-            // the key len includes the \0 byte
-            // this is ok for the tests but we only want the key not the \0
-            // byte
+            // cut the \0
             o.key_len--;
-            o.key = malloc(o.key_len * sizeof(char));
+            char *buf;
+            buf = malloc(o.key_len * sizeof(char));
+            if (buf == NULL) {
+                errx(1, "error allocating memory on the heap");
+            }
+            o.key = buf;
             read_key_file(&o);
         }
         INFO("- Create and load key in the TA secure storage\n");
 
-        memcpy(key_data, o.key, o.key_len);
+        strncpy(key_data, o.key, o.key_len);
+        DEBG("key before write %s len: %zu", key_data, o.key_len);
         res = write_secure_object(&ctx, o.name, key_data, sizeof(key_data));
-        if (res != TEEC_SUCCESS)
+        if (res != TEEC_SUCCESS) {
             errx(1, "Failed to create an object in the secure storage");
+            goto cleanup;
+        }
+        res = read_secure_object(&ctx, o.name, read_data, sizeof(read_data));
+        if (res != TEEC_SUCCESS)
+            errx(1, "Failed to read an object from the secure storage");
 
+        DEBG("key after read: %s", read_data);
         break;
     case SUBCOMMAND_GET_KEY:
         INFO("Get key from the secure storage\n");
@@ -396,16 +424,17 @@ int main(int argc, char *argv[]) {
         INFO("- Read back the object\n");
 
         res = read_secure_object(&ctx, o.name, read_data, sizeof(read_data));
-        DEBG("key after read: %s", read_data);
         if (res != TEEC_SUCCESS)
             errx(1, "Failed to read an object from the secure storage");
+
+        DEBG("key after read: %s", read_data);
         break;
     case SUBCOMMAND_DEL_KEY:
         INFO("Delete key from the secure storage\n");
         if (o.name == NULL) {
             errx(1, "No key name provided");
         }
-        INFO("- Delete the key after reading it\n");
+        INFO("- Delete the key\n");
         res = delete_secure_object(&ctx, o.name);
         if (res != TEEC_SUCCESS)
             errx(1, "Failed to delete the object: 0x%x", res);
@@ -417,9 +446,6 @@ int main(int argc, char *argv[]) {
         goto cleanup;
         break;
     }
-
-    DEBG("before writing to optee key: %s, file %s, len %zd", o.key, o.file,
-         o.key_len);
 
 cleanup:
     INFO("\nWe're done, close and release TEE resources\n");
