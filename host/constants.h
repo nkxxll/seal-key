@@ -1,7 +1,8 @@
 #ifndef CONSTANTS_H
 #define CONSTANTS_H
+#include <stdlib.h>
 
-#define MAX_KEY_LEN 1024
+const size_t MAX_KEY_LEN = 1024;
 #define SUBCOMMAND_GET_KEY 1
 #define SUBCOMMAND_SET_KEY 2
 #define SUBCOMMAND_DEL_KEY 3
