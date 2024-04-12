@@ -155,7 +155,9 @@ TEEC_Result delete_secure_object(struct test_ctx *ctx, char *id) {
 
     switch (res) {
     case TEEC_SUCCESS:
+        break;
     case TEEC_ERROR_ITEM_NOT_FOUND:
+        printf("Command DELETE failed: 0x%x / %u\n", res, origin);
         break;
     default:
         printf("Command DELETE failed: 0x%x / %u\n", res, origin);
