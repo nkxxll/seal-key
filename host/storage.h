@@ -15,7 +15,7 @@ struct test_ctx {
 void prepare_tee_session(struct test_ctx *ctx);
 void terminate_tee_session(struct test_ctx *ctx);
 TEEC_Result read_secure_object(struct test_ctx *ctx, char *id, char *data,
-                               size_t data_len);
+                               size_t *data_len);
 TEEC_Result write_secure_object(struct test_ctx *ctx, char *id, char *data,
                                 size_t data_len);
 TEEC_Result delete_secure_object(struct test_ctx *ctx, char *id);

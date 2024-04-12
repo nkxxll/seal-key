@@ -69,7 +69,7 @@ void terminate_tee_session(struct test_ctx *ctx) {
 // todo: this is a function we can use our object here is the key in this case
 // of a seal key application
 TEEC_Result read_secure_object(struct test_ctx *ctx, char *id, char *data,
-                               size_t data_len) {
+                               size_t *data_len) {
     TEEC_Operation op;
     uint32_t origin;
     TEEC_Result res;
@@ -83,12 +83,13 @@ TEEC_Result read_secure_object(struct test_ctx *ctx, char *id, char *data,
     op.params[0].tmpref.size = id_len;
 
     op.params[1].tmpref.buffer = data;
-    op.params[1].tmpref.size = data_len;
+    op.params[1].tmpref.size = *data_len;
 
     res =
         TEEC_InvokeCommand(&ctx->sess, TA_SEAL_KEY_CMD_READ_RAW, &op, &origin);
     switch (res) {
     case TEEC_SUCCESS:
+        *data_len = op.params[1].tmpref.size;
         break;
     case TEEC_ERROR_SHORT_BUFFER:
         printf("Buffer too short\n");
@@ -398,8 +399,8 @@ int main(int argc, char *argv[]) {
 
     char key_data[o.key_len];
     // save printing of the key
-    char read_data[o.key_len + 1];
-    read_data[o.key_len] = '\0';
+    char read_data[MAX_KEY_LEN];
+    size_t read_data_len = MAX_KEY_LEN;
     // test this after
     switch (o.subcommand) {
     case SUBCOMMAND_SET_KEY:
@@ -417,11 +418,9 @@ int main(int argc, char *argv[]) {
             errx(1, "Failed to create an object in the secure storage");
             goto cleanup;
         }
-        res = read_secure_object(&ctx, o.name, read_data, sizeof(read_data));
+        res = read_secure_object(&ctx, o.name, read_data, &read_data_len);
         if (res != TEEC_SUCCESS)
             errx(1, "Failed to read an object from the secure storage");
-
-        DEBG("key after read: %s", read_data);
         break;
     case SUBCOMMAND_GET_KEY:
         INFO("Get key from the secure storage\n");
@@ -430,12 +429,10 @@ int main(int argc, char *argv[]) {
         }
         DEBG("Read back the object - len, %zu\n", o.key_len);
 
-        res = read_secure_object(&ctx, o.name, read_data, sizeof(read_data));
+        res = read_secure_object(&ctx, o.name, read_data, &read_data_len);
         if (res != TEEC_SUCCESS)
             errx(1, "Failed to read an object from the secure storage");
 
-        // this should be base64 encode as well as the input
-        DEBG("key after read: %s", read_data);
         break;
     case SUBCOMMAND_DEL_KEY:
         INFO("Delete key from the secure storage\n");
@@ -453,6 +450,22 @@ int main(int argc, char *argv[]) {
         exit(1);
         goto cleanup;
         break;
+    }
+
+    if (o.subcommand == SUBCOMMAND_SET_KEY) {
+        char read_buf[read_data_len + 1];
+        read_buf[read_data_len] = '\0';
+        memcpy(read_buf, read_data, read_data_len);
+        // this should be base64
+        DEBG("test read :: key after read: %s", read_buf);
+    }
+    if (o.subcommand == SUBCOMMAND_GET_KEY) {
+        char read_buf[read_data_len + 1];
+        read_buf[read_data_len] = '\0';
+        memcpy(read_buf, read_data, read_data_len);
+        // this should be base64
+        DEBG("key after read: %s", read_buf);
+        printf("%s\n", read_buf);
     }
 
 cleanup:
