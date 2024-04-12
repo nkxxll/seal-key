@@ -218,6 +218,81 @@ void set_name(char *name, options_t *options) {
     snprintf(buf, sizeof(buf), "key#%d", atoi(name));
     strncpy(options->name, buf, sizeof(buf));
 }
+
+void parse_get_key(int argc, char *argv[], options_t *options) {
+    if (argc < 3) {
+        usage_get_key();
+        exit(1);
+    }
+}
+void parse_set_key(int argc, char *argv[], options_t *options) {
+    if (argc < 3) {
+        usage_set_key();
+        exit(1);
+    } else if (argc == 5) {
+        if (strcmp(argv[3], "-f") == 0) {
+            options->file = argv[4];
+
+            options->key_len = get_file_size(options->file);
+            if (options->key_len < 0) {
+                ERRO("Failed to get the size of %s", options->file);
+                exit(1);
+            }
+            if (options->key_len > MAX_KEY_LEN) {
+                ERRO("The file contents are too long");
+                exit(1);
+            }
+            // cut the \0
+            options->key_len--;
+            char *buf;
+            buf = malloc(options->key_len * sizeof(char));
+            if (buf == NULL) {
+                errx(1, "error allocating memory on the heap");
+            }
+            options->key = buf;
+            read_key_file(options);
+        } else if (strcmp(argv[3], "-k") == 0) {
+            options->key_len = strlen(argv[4]);
+            if (options->key_len > MAX_KEY_LEN) {
+                ERRO("Warning: key length is to big max is: %zu bytes\n",
+                     MAX_KEY_LEN);
+                exit(1);
+            }
+            char *buf = malloc(options->key_len * sizeof(char));
+            if (buf == NULL) {
+                errx(1, "there was an error allocating memory for the key");
+            }
+            options->key = buf;
+            // this cuts of the \0 bytes but this is ok
+            strncpy(options->key, argv[4], options->key_len);
+        }
+    } else if (argc == 4 && (strcmp(argv[3], "-k") == 0)) {
+        // ask for stdin
+        printf("Enter the key (the key is cut at %zu):\n", MAX_KEY_LEN);
+        char buf[MAX_KEY_LEN];
+        // Read at most n bytes
+        // again the need to use base64 this was very stupid
+        char *res = fgets(buf, MAX_KEY_LEN, stdin);
+        size_t len = strlen(buf);
+        // ditch the \0 byte
+        len--;
+        if (res != NULL) {
+            printf("Read %zu bytes\n", len);
+            options->key_len = len;
+            options->key = malloc(options->key_len * sizeof(char));
+            if (options->key == NULL) {
+                errx(1, "error allocating memory on the heap");
+            }
+            strncpy(options->key, buf, options->key_len);
+        } else {
+            printf("Error reading input\n");
+        }
+    } else {
+        usage_set_key();
+        exit(1);
+    }
+}
+
 void parse_args(int argc, char *argv[], options_t *options) {
     if (argc < 2) {
         usage(argv[0]);
@@ -226,90 +301,11 @@ void parse_args(int argc, char *argv[], options_t *options) {
     if (strcmp(argv[1], "get-key") == 0 || strcmp(argv[1], "g") == 0) {
         options->subcommand = SUBCOMMAND_GET_KEY;
         set_name(argv[2], options);
-        if (argc < 5) {
-            usage_get_key();
-            exit(1);
-        }
-        if (strcmp(argv[3], "-s") == 0) {
-            size_t len = atoi(argv[4]);
-            if (len > MAX_KEY_LEN) {
-                ERRO("Warning: key length is to big max is: %zu bytes\n",
-                     MAX_KEY_LEN);
-                exit(1);
-            }
-            options->key_len = len;
-        } else {
-            usage_get_key();
-            exit(1);
-        }
+        parse_get_key(argc, argv, options);
     } else if (strcmp(argv[1], "set-key") == 0 || strcmp(argv[1], "s") == 0) {
         options->subcommand = SUBCOMMAND_SET_KEY;
         set_name(argv[2], options);
-        if (argc < 3) {
-            usage_set_key();
-            exit(1);
-        } else if (argc == 5) {
-            if (strcmp(argv[3], "-f") == 0) {
-                options->file = argv[4];
-
-                options->key_len = get_file_size(options->file);
-                if (options->key_len < 0) {
-                    ERRO("Failed to get the size of %s", options->file);
-                    exit(1);
-                }
-                if (options->key_len > MAX_KEY_LEN) {
-                    ERRO("The file contents are too long");
-                    exit(1);
-                }
-                // cut the \0
-                options->key_len--;
-                char *buf;
-                buf = malloc(options->key_len * sizeof(char));
-                if (buf == NULL) {
-                    errx(1, "error allocating memory on the heap");
-                }
-                options->key = buf;
-                read_key_file(options);
-            } else if (strcmp(argv[3], "-k") == 0) {
-                options->key_len = strlen(argv[4]);
-                if (options->key_len > MAX_KEY_LEN) {
-                    ERRO("Warning: key length is to big max is: %zu bytes\n",
-                         MAX_KEY_LEN);
-                    exit(1);
-                }
-                char *buf = malloc(options->key_len * sizeof(char));
-                if (buf == NULL) {
-                    errx(1, "there was an error allocating memory for the key");
-                }
-                options->key = buf;
-                // this cuts of the \0 bytes but this is ok
-                strncpy(options->key, argv[4], options->key_len);
-            }
-        } else if (argc == 4 && (strcmp(argv[3], "-k") == 0)) {
-            // ask for stdin
-            printf("Enter the key (the key is cut at %zu):\n", MAX_KEY_LEN);
-            char buf[MAX_KEY_LEN];
-            // Read at most n bytes
-            // again the need to use base64 this was very stupid
-            char *res = fgets(buf, MAX_KEY_LEN, stdin);
-            size_t len = strlen(buf);
-            // ditch the \0 byte
-            len--;
-            if (res != NULL) {
-                printf("Read %zu bytes\n", len);
-                options->key_len = len;
-                options->key = malloc(options->key_len * sizeof(char));
-                if (options->key == NULL) {
-                    errx(1, "error allocating memory on the heap");
-                }
-                strncpy(options->key, buf, options->key_len);
-            } else {
-                printf("Error reading input\n");
-            }
-        } else {
-            usage_set_key();
-            exit(1);
-        }
+        parse_set_key(argc, argv, options);
     } else if (strcmp(argv[1], "del-key") == 0 || strcmp(argv[1], "d") == 0) {
         options->subcommand = SUBCOMMAND_DEL_KEY;
         set_name(argv[2], options);
