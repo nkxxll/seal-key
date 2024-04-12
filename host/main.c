@@ -216,7 +216,7 @@ void usage_decrypt_unseal() {
 
 void set_name(char *name, options_t *options) {
     char buf[8];
-    snprintf(buf, sizeof(buf), "key#%d", atoi(name));
+    snprintf(buf, sizeof(buf), "%s%d", PREFIX, atoi(name));
     strncpy(options->name, buf, sizeof(buf));
 }
 
